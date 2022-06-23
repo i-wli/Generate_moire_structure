@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 import ase.io
 from ase.atoms import Atoms
+from ase.build import make_supercell
 
 """This is a version where to input superperiodicity and output twist angle"""
 
@@ -34,7 +35,7 @@ def calc_vectors_angle(v1, v2):
     degree = angle * 180 /np.pi
     return theta(angle, degree)
 
-FLOAT_PREC = 1e-6
+FLOAT_PREC = 1e-4
 def float_eq(f1, f2, prec=FLOAT_PREC):
     """float equal"""
     return abs(f1 - f2) < prec
@@ -63,12 +64,17 @@ def py_atoms_to_ase_atoms(atoms: Pyatoms) -> ase.atoms.Atoms:
     return atoms    
     
 
-def check_vectors(vectors):
+def check_vectors(atoms: ase.atoms.Atoms):
+    vectors = atoms.cell
+    len_ang = atoms.get_cell_lengths_and_angles()
     if not (float_eq(vectors[0][2], 0.0) and
             float_eq(vectors[1][2], 0.0) and
             float_eq(vectors[2][0], 0.0) and
             float_eq(vectors[2][1], 0.0)):
-        exit('[error] Input structures: c axis must be in z direction!')
+        exit('[error] Input structures: c axis must be in z direction')
+    if not (float_eq(len_ang[0], len_ang[1]) and
+            float_eq(len_ang[5], 60)):
+        exit('[error] This version is only for P6 (a=b & γ=60)')
 
 
 def coord_cart2frac(cell_vecs, cart_vec):
@@ -159,6 +165,7 @@ def gen_supercell(bottom: ase.atoms.Atoms,
     top_super = get_supercell_atoms_pos(vectors_t, tran_2D_t, top)
     top_super_frac = coord_cart2frac(vectors_t, top_super.positions)
     top_super_pos = coord_frac2cart(vectors_b, top_super_frac)
+    #top_super_pos = np.dot(tran_2D_b,np.dot(np.linalg.inv(tran_2D_t), top_super.positions))
     top_super_pos[..., 2] = top_super_pos[..., 2] + delta_z
     positions = np.vstack((bottom_super_pos, top_super_pos))
     number = np.hstack((bottom_super.numbers, top_super.numbers))
@@ -168,14 +175,15 @@ def gen_supercell(bottom: ase.atoms.Atoms,
 
 def get_parser():
     parser = argparse.ArgumentParser(description="A simply script for twist bilayers, could not gernerate heterostures")
-    parser.add_argument('--bottom', required=True, help='Path to lower layer, need to be recognized by ASE')
-    parser.add_argument('--top', required=True, help='Path to upper layer, need to be recognized by ASE')
+    parser.add_argument('-b','--bottom', required=True, help='Path to lower layer, need to be recognized by ASE')
+    parser.add_argument('-t','--top', required=True, help='Path to upper layer, need to be recognized by ASE')
     parser.add_argument('-M', required=True, help='supercell matrix with np.array([[M,N],[-N,M+N]])', type=int)
     parser.add_argument('-N', required=True, help='supercell matrix with np.array(([M,N],[-N,M+N]])', type=int)
-    parser.add_argument('-z', help='super lattice of z direction, default = 20', type=float, default = 20.0)
-    parser.add_argument('-d', help='distance of two layers, default = 4', type=float, default = 4.0)
-    parser.add_argument('--write', help='Path to write supercell, need to be recognized by ASE')
-    parser.add_argument('--theta', help='output twist angle with format of rad or deg, default = deg', default='deg', choices=['rad', 'deg'])
+    parser.add_argument('-z', help='super lattice of z direction, default = 20 A', type=float, default = 20.0)
+    parser.add_argument('-d', help='distance of two layers, default = 4 A', type=float, default = 4.0)
+    parser.add_argument('-w','--write', help='Path to write supercell, need to be recognized by ASE')
+    parser.add_argument('-o','--outformat', help='output file-format, like lammps-data', default = None)
+    parser.add_argument('-a','--angle', help='output twist angle with format of rad or deg, default = deg', default='deg', choices=['rad', 'deg'])
     return parser
 
 if __name__ == '__main__':
@@ -183,15 +191,20 @@ if __name__ == '__main__':
     args = parser.parse_args()
     bottom = ase.io.read(args.bottom)
     top = ase.io.read(args.top)
+    check_vectors(bottom)
+    check_vectors(top)
     tran_2D_b = np.array([[args.M,args.N],[-args.N,args.M+args.N]])
     tran_2D_t = np.array([[args.N, args.M], [-args.M, args.M + args.N]])
     result = gen_supercell(bottom, top, tran_2D_b, tran_2D_t, args.z, args.d)
     theta = calc_vectors_angle(result.cell[0], bottom.cell[0])
-    if args.theta == 'rad':
+    if args.angle == 'rad':
         print("generating twist supercell to arg.write with twist angle {}".format(np.pi/3 - 2*theta.radian))
     else:
         print("generating twist supercell to arg.write with twist angle {}".format(60 - 2*theta.degree))
     print("Supercell lattice size: {}".format(result.cell.cellpar()[0]))
     print("Number of atoms: {}".format(len(result)))
-    result.write(args.write)
+    if args.write == None:
+        result.write("Super_{0:.2f}_{1}.xsf".format(60 - 2*theta.degree, len(result)))
+    else:
+        result.write(args.write, format=args.outformat)
 
